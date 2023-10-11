@@ -5,3 +5,6 @@ Heavily modified version of <https://gist.github.com/Netzvamp/8623def14501de15c9
 
 The websocket client will be the Base for a
 Loxone Communicator to control Loxone with Purebasic.
+
+## State
+in Progress
