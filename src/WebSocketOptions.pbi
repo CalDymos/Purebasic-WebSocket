@@ -24,6 +24,8 @@ DeclareModule WebSocketOptions ;
     Get_SendDelay()
     Set_ConnectionTimout(TimeOut.l)
     Get_ConnectionTimout()
+    Set_KeepAliveInterval(Interval.l)
+    Get_KeepAliveInterval()
   EndInterface
   
   ;}
@@ -52,6 +54,7 @@ DeclareModule WebSocketOptions ;
     AutoReconnect.b
     SendDelay.l
     ConnectionTimout.l
+    keepAliveInterval.l ;The interval to use for keep-alive pings.
   EndStructure
   
   ;}
@@ -135,6 +138,9 @@ Module WebSocketOptions
       
       \SendDelay = 80
       \ConnectionTimout = 15000 ; Set Connection Timout to default value 15000
+      \keepAliveInterval = -1   ; Off Value
+      \AutoReconnect = #False
+      
       
       EndWith
     EndIf
@@ -245,7 +251,21 @@ Module WebSocketOptions
       ProcedureReturn \ConnectionTimout
     EndWith
   EndProcedure
-    
+  
+  Procedure Set_KeepAliveInterval(*This.sWebSocketOptions, interval.l)
+    With *This
+      If interval < -1 Or interval = 0
+        \KeepAliveInterval = -1
+      Else
+        \keepAliveInterval = interval
+      EndIf
+    EndWith
+  EndProcedure
+  
+  Procedure.l Get_KeepAliveInterval(*This.sWebSocketOptions)
+    ProcedureReturn *this\KeepAliveInterval
+  EndProcedure
+  
   ;}
   
   ;{ Event Handler Methods
@@ -294,6 +314,8 @@ Module WebSocketOptions
         \addr[OffsetOf(iWebSocketOptions\Get_SendDelay()) / SizeOf(integer)] = @Get_SendDelay()
         \addr[OffsetOf(iWebSocketOptions\Set_ConnectionTimout()) / SizeOf(integer)] = @Set_ConnectionTimout()
         \addr[OffsetOf(iWebSocketOptions\Get_ConnectionTimout()) / SizeOf(integer)] = @Get_ConnectionTimout()
+        \addr[OffsetOf(iWebSocketOptions\Set_KeepAliveInterval()) / SizeOf(integer)] = @Set_KeepAliveInterval()
+        \addr[OffsetOf(iWebSocketOptions\Get_KeepAliveInterval()) / SizeOf(integer)] = @Get_KeepAliveInterval()
       EndWith  
     Else
       End #ERROR_NOT_ENOUGH_MEMORY;

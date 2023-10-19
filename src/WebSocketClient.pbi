@@ -95,8 +95,6 @@ DeclareModule WebSocket
     connectionID.i
     uri.Net::sUri
     state.l ;.WebSocketState
-    keepAliveInterval.l
-    timeOut.l
     *options.WebSocketOptions::IWebSocketOptions
     *listenerThread.Thread::sThreadCtrl
     listenerRunning.b
@@ -104,7 +102,6 @@ DeclareModule WebSocket
     senderRunning.b
     *monitorThread.Thread::sThreadCtrl
     monitorRunning.b
-    autoReconnect.b
     reconnecting.b
     reconnectNeeded.b
     disconnectCalled.b
@@ -112,6 +109,7 @@ DeclareModule WebSocket
     *reconnectThread.Thread::sThreadCtrl
     *sendQueueAddThread.Thread::sThreadCtrl
     LastMessageHeader.sMessageHeader
+    *keepAliveTimer
     
     List sendQueue.sRequestMessage() 
     lastError.sErr
@@ -201,7 +199,8 @@ Module WebSocket
   Declare _Abort(*This.sWebSocket)
   Declare _Close(*This.sWebSocket, closeStatus.w, statusDescription.s)
   Declare _GetLastError(*Err.sErr) 
-  
+  Declare _KeepAlive_Callback(uTimerID, uMsg, dwUser, dw1, dw2)
+  Declare _StartKeepAlive(*This.sWebSocket, elapse.l)
   
   ;}
   
@@ -262,9 +261,10 @@ Module WebSocket
         
         \options = *options
         \instanceName = InstanceName
-        \TimeOut = \options\Get_ConnectionTimout()
         
-        \AutoReconnect = \options\Get_AutoReconnect()
+        If *Object\options\Get_KeepAliveInterval() <> - 1 
+          _StartKeepAlive(*Object, *Object\options\Get_KeepAliveInterval())
+        EndIf
         
         _StartMonitor(*Object)
       EndWith
@@ -276,6 +276,7 @@ Module WebSocket
   Procedure Dispose(*This.sWebSocket)
     If *This
       With *This
+        If \keepAliveTimer : KillTimer_(0,\keepAliveTimer) : EndIf
         \disposeCalled = #True ; Request threads to be quit
         Disconnect(*This)
         Thread::Finalize(\sendQueueAddThread)
@@ -299,19 +300,7 @@ Module WebSocket
   Procedure.l Get_State(*This.sWebSocket)
     ProcedureReturn *This\state
   EndProcedure
-  
-  Procedure Set_KeepAliveInterval(*This.sWebSocket, interval.l)
-    With *This
-      LockMutex(\Mutex)
-      \KeepAliveInterval = interval
-      UnlockMutex(\Mutex)
-    EndWith
-  EndProcedure
-  
-  Procedure.l Get_KeepAliveInterval(*This.sWebSocket)
-    ProcedureReturn *this\KeepAliveInterval
-  EndProcedure
-  
+    
   Procedure.l Get_SendQueueLength(*This.sWebSocket)
     ProcedureReturn ListSize(*this\sendQueue())
   EndProcedure
@@ -395,6 +384,7 @@ Module WebSocket
     Define *thread.Thread::sThreadCtrl
     Protected err.sErr
     Protected msec
+    Protected timeout = *this\options\Get_ConnectionTimout()
     
     With *This
       dbg("Connect called.")
@@ -404,14 +394,14 @@ Module WebSocket
 
       *thread = Thread::New()
       Thread::Start(*thread, @_Connect_Thread(), *This)
-      Thread::Wait(*thread, \timeOut)
+      Thread::Wait(*thread, timeOut)
       
       dbg("Starting Listener and Sender.")  
       _StartListener(*This)
       _StartSender(*This)
       
       msec = 0
-      While \State <> Net::#WebSocketState_Open And msec < \TimeOut
+      While \State <> Net::#WebSocketState_Open And msec < TimeOut
         msec + 1
         Delay(1)
       Wend
@@ -471,6 +461,24 @@ Module WebSocket
   EndProcedure
   
   Procedure SendRawArray(*This.sWebSocket, Array RawData.a(1))
+    Define *Param._sSendParam
+    Define *thread.Thread::sThreadCtrl
+    
+    *Param = AllocateStructure(_sSendParam)
+    *Param\this = *This
+    ReDim *param\msg\aData(ArraySize(RawData()))
+    CopyArray(RawData(), *param\msg\aData())
+    *Param\msg\MessageType = Net::#WebSocketMessageType_Binary
+    
+    With *This  
+      *thread = Thread::New()
+      Thread::Start(*thread, @_sendQueueAdd_Thread(),*Param)
+      LockMutex(\Mutex)
+      ;Abort And Free Thread if it is still running
+      Thread::Finalize(\sendQueueAddThread, #True, 1)
+      \sendQueueAddThread = *thread
+      UnlockMutex(\Mutex)
+    EndWith
   EndProcedure
   
   
@@ -485,6 +493,7 @@ Module WebSocket
     Define *this.sWebSocket = *Thread\Param ; Get Pointer to WebSocket Instance
     Protected *ProxyUri.Net::sUri
     Protected ConnectionID
+    Protected timeout = *this\options\Get_ConnectionTimout()
     
     With *This      
       LockMutex(\Mutex)
@@ -494,7 +503,7 @@ Module WebSocket
       If \Uri\Scheme = "wss" ; If we connect with encryption (https)
         *ProxyUri = \options\Get_ProxyUri()
         If *ProxyUri\OriginalString 
-          ConnectionID = OpenNetworkConnection(*ProxyUri\Host, *ProxyUri\Port, #PB_Network_TCP, \TimeOut)
+          ConnectionID = OpenNetworkConnection(*ProxyUri\Host, *ProxyUri\Port, #PB_Network_TCP, TimeOut)
           LockMutex(\Mutex)
           \connectionID = ConnectionID
           UnlockMutex(\Mutex)
@@ -502,7 +511,7 @@ Module WebSocket
           dbg("We need an SSL-Proxy like stunnel for encryption. Configure a proxy")
         EndIf
       ElseIf \Uri\Scheme = "ws"
-        ConnectionID = OpenNetworkConnection(\Uri\Host, \Uri\Port, #PB_Network_TCP, \TimeOut)
+        ConnectionID = OpenNetworkConnection(\Uri\Host, \Uri\Port, #PB_Network_TCP, TimeOut)
         LockMutex(\Mutex)
         \connectionID = ConnectionID
         UnlockMutex(\Mutex)
@@ -610,9 +619,10 @@ Module WebSocket
       PokeA(*FrameBuffer + pos, Mask(2))              : pos + 1
       PokeA(*FrameBuffer + pos, Mask(3))              : pos + 1
       
-      _ApplyMasking(PeekL(@Mask()), *payloadBuffer)
-      
-      CopyMemory(*payloadBuffer, *FrameBuffer + pos, *header\payloadLength)
+      If *payloadBuffer 
+        _ApplyMasking(PeekL(@Mask()), *payloadBuffer)
+        CopyMemory(*payloadBuffer, *FrameBuffer + pos, *header\payloadLength)
+      EndIf
       
       If SendNetworkData(\connectionID, *FrameBuffer, Headerlength + *header\payloadLength) = Headerlength + *header\payloadLength
         dbg("sent frame size in byte: " + Str(Headerlength + *header\payloadLength))
@@ -654,6 +664,15 @@ Module WebSocket
         If header\PayloadLength > #MaxControlPayloadLength ; max Payload of 125 allowed
           header\PayloadLength = #MaxControlPayloadLength
         EndIf
+      ElseIf messageType = Net::#WebSocketMessageType_Pong ; Send Pong with Payload Data
+        header\FIN = #True
+        header\Opcode = #MessageOpcode_Pong
+        header\PayloadLength = ArraySize(buffer()) + 1
+        If header\PayloadLength > #MaxControlPayloadLength ; max Payload of 125 allowed
+          header\PayloadLength = #MaxControlPayloadLength
+        EndIf
+      Else
+        ProcedureReturn 
       EndIf
       If header\PayloadLength 
         *PayloadBuffer = AllocateMemory(header\PayloadLength)
@@ -732,6 +751,27 @@ Module WebSocket
     EndWith
   EndProcedure
   
+  Procedure _StartKeepAlive(*This.sWebSocket, elapse.l)
+    With *this
+    LockMutex(\Mutex)
+    \keepAliveTimer = timeSetEvent_(elapse, 0, @_KeepAlive_Callback(), *this, #TIME_PERIODIC)
+    UnlockMutex(\Mutex)
+    EndWith
+  EndProcedure
+  
+  Procedure _KeepAlive_Callback(uTimerID, uMsg, dwUser, dw1, dw2)
+    Define *this.sWebSocket
+    Protected Dim Empty.a(0) : FreeArray(Empty())
+    If dwUser
+      *this = dwUser
+      With *this
+        If \state = Net::#WebSocketState_Open And Not \disposeCalled And Not \disconnectCalled And Not \reconnecting
+          _send(*this, Empty(), Net::#WebSocketMessageType_Pong, #True)
+        EndIf
+      EndWith
+    EndIf        
+  EndProcedure
+
   Procedure _StartMonitor(*This.sWebSocket)
     Define *thread.Thread::sThreadCtrl
     
@@ -750,6 +790,7 @@ Module WebSocket
   Procedure _StartMonitor_Thread(*Thread.Thread::sThreadCtrl)
     Define *This.sWebSocket = *Thread\Param
     Protected  lastState
+    Protected AutoReconnect = *this\options\Get_AutoReconnect()
     
     With *this
       dbg("Entering monitor loop.")
@@ -784,7 +825,7 @@ Module WebSocket
           Break
         EndIf
         
-        If \AutoReconnect And \reconnectNeeded And \State = Net::#WebSocketState_Aborted
+        If AutoReconnect And \reconnectNeeded And \State = Net::#WebSocketState_Aborted
           Break
         EndIf
         
@@ -794,7 +835,7 @@ Module WebSocket
           Continue
         EndIf
         
-        If (\AutoReconnect And (\State = Net::#WebSocketState_Closed Or \State = Net::#WebSocketState_Aborted))
+        If (AutoReconnect And (\State = Net::#WebSocketState_Closed Or \State = Net::#WebSocketState_Aborted))
           
           Break;
         EndIf
@@ -818,7 +859,7 @@ Module WebSocket
         EndIf
         
         If (\State = Net::#WebSocketState_Closed Or \State = Net::#WebSocketState_Aborted) And Not \Reconnecting
-          If lastState = Net::#WebSocketState_Open And Not \disconnectCalled And \AutoReconnect
+          If lastState = Net::#WebSocketState_Open And Not \disconnectCalled And AutoReconnect
             dbg("Reconnect needed.")
             ; Exit the loop and start async reconnect
             LockMutex(\Mutex)
@@ -851,7 +892,7 @@ Module WebSocket
       \MonitorRunning = #False
       UnlockMutex(\Mutex)
       dbg("Exiting monitor")
-      If (\AutoReconnect And \reconnectNeeded And Not \reconnecting And Not \disconnectCalled And Not *Thread\Abort)
+      If (AutoReconnect And \reconnectNeeded And Not \reconnecting And Not \disconnectCalled And Not *Thread\Abort)
         
         _DoReconnect(*This);
       EndIf
@@ -876,6 +917,7 @@ Module WebSocket
     Protected msec.l
     Protected connected.b
     Define *ConnectThread.Thread::sThreadCtrl
+    Protected timeOut = *This\options\Get_ConnectionTimout()
     
     With *This
       LockMutex(\Mutex)
@@ -928,7 +970,7 @@ Module WebSocket
         dbg("Attempting connect.")
         msec = 0
         Thread::Start(*ConnectThread, @_Connect_Thread(), *This)
-        Thread::Wait(*ConnectThread, \timeOut)
+        Thread::Wait(*ConnectThread, timeOut)
         
         If Not IsThread(*ConnectThread\ID) And \State = Net::#WebSocketState_Open 
           connected = #True 
@@ -1466,8 +1508,6 @@ Module WebSocket
         \addr[OffsetOf(iWebSocket\Disconnect()) / SizeOf(integer)] = @Disconnect()       
         \addr[OffsetOf(iWebSocket\Send()) / SizeOf(integer)] = @Send()
         \addr[OffsetOf(iWebSocket\SendArray()) / SizeOf(integer)] = @SendArray()
-        \addr[OffsetOf(iWebSocket\Set_KeepAliveInterval()) / SizeOf(integer)] = @Set_KeepAliveInterval()
-        \addr[OffsetOf(iWebSocket\Get_KeepAliveInterval()) / SizeOf(integer)] = @Get_KeepAliveInterval()
         \addr[OffsetOf(iWebSocket\Get_State()) / SizeOf(integer)] = @Get_State()
         \addr[OffsetOf(iWebSocket\Get_SendQueueLength()) / SizeOf(integer)] = @Get_SendQueueLength()
         \addr[OffsetOf(iWebSocket\Get_InstanceName()) / SizeOf(integer)] = @Get_InstanceName()
