@@ -13,6 +13,16 @@ CompilerEndIf
 DeclareModule Thread
   
   ;- --------------------------------------------------------------------------
+  ;-   Public Enums
+  ;- -------------------------------------------------------------------------- 
+  
+  Enumeration ThreadState
+    #ThreadState_Running = 0
+    #ThreadState_Suspended = 64
+    #ThreadState_AbortRequested = 128
+  EndEnumeration
+  
+  ;- --------------------------------------------------------------------------
   ;-   Public Structure
   ;- --------------------------------------------------------------------------  
   
@@ -23,19 +33,21 @@ DeclareModule Thread
     Signal.i
     Suspend.i
     Abort.i
-    *AddData
+    *Param ; Additional Parameter to pass structured data to the thread and back
   EndStructure
 
   ;- --------------------------------------------------------------------------
   ;-   Declaration Public Methods
   ;- --------------------------------------------------------------------------
   
-  Declare Start(*Thread.sThreadCtrl, *Procedure, *AddData)
+  Declare New()
+  Declare Start(*Thread.sThreadCtrl, *Procedure, *Param)
   Declare Abort(*Thread.sThreadCtrl, Wait=1000)
   Declare Suspend(*Thread.sThreadCtrl)
   Declare Resume(*Thread.sThreadCtrl)
   Declare GetState(*Thread.sThreadCtrl)
   Declare Finalize(*Thread.sThreadCtrl, Abort=#True, Wait=1000)
+  Declare Wait(*Thread.sThreadCtrl, Wait=0)
   
 EndDeclareModule  
 
@@ -46,31 +58,37 @@ Module Thread
   ;- --------------------------------------------------------------------------
   ;-   Private Structures and Vars
   ;- --------------------------------------------------------------------------
-  Enumeration ThreadState
-    #ThreadState_Running = 0
-    #ThreadState_Suspended = 64
-    #ThreadState_AbortRequested = 128
-  EndEnumeration
     
   ;- --------------------------------------------------------------------------
   ;-   Public Methods
   ;- --------------------------------------------------------------------------  
   
+  Procedure New()
+    Define *thread.sThreadCtrl
+    
+    *thread = AllocateStructure(sThreadCtrl)
+    
+    If *thread
+      *thread\Mutex = CreateMutex()
+    EndIf
+    
+    ProcedureReturn *thread
+  EndProcedure
+    
   ;<comment>
   ;  <summary>Creates a new thread.</summary>
   ;  <param><b>*Thread</b>: Pointer to a 'sThreadCtrl' Structure, must always be created with AllocateStructure.</param>
   ;  <param><b>*Procedure</b>: The address of the procedure you want to use as new thread.</param>
-  ;  <param><b>*AddData</b>: Pointer to an additional data structure.</param>
+  ;  <param><b>*Param</b>: Pointer to an additional data structure.</param>
   ;  <return>The result is zero if the thread was successfully created or already exists.</return>
   ;  <example>Thread::Start(*Thread, @MyThreadProc(), *Data)</example>
   ;</comment>
-  Procedure Start(*Thread.sThreadCtrl, *Procedure, *AddData)
+  Procedure Start(*Thread.sThreadCtrl, *Procedure, *Param)
     Define ThreadID
     
     If Not IsThread(*Thread\ID)
-      *Thread\AddData = *AddData
+      *Thread\Param = *Param
       *Thread\ID      = CreateThread(*Procedure, *Thread)  
-      *Thread\Mutex = CreateMutex()
     Else
       ThreadID = *Thread\ID
     EndIf
@@ -197,7 +215,8 @@ Module Thread
   ;  <example>Thread::Finalize(*Thread, #True, 15000)</example>
   ;</comment>
   Procedure Finalize(*Thread.sThreadCtrl, Abort=#True, Wait=1000)
-                  
+    
+    If *thread
       LockMutex(*Thread\Mutex)
       
       If IsThread(*Thread\ID)
@@ -224,7 +243,17 @@ Module Thread
         
         ProcedureReturn #True
       EndIf
-    
+    EndIf
   EndProcedure 
+  
+  Procedure Wait(*Thread.sThreadCtrl, Wait=0)
+    If *Thread
+      If Not wait
+        ProcedureReturn WaitThread(*Thread\ID)
+      Else
+        ProcedureReturn WaitThread(*Thread\ID, wait)
+      EndIf
+    EndIf
+  EndProcedure
   
 EndModule

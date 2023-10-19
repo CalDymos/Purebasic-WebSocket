@@ -48,6 +48,7 @@ DeclareModule Net
     #WebSocketMessageType_Unknown
     #WebSocketMessageType_Invalid
     #WebSocketMessageType_Ping
+    #WebSocketMessageType_Pong
   EndEnumeration
   
   ;- --------------------------------------------------------------------------

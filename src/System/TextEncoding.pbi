@@ -13,7 +13,7 @@ DeclareModule TextEncoding
   ;- --------------------------------------------------------------------------
     
   Declare.s ToAscii (*UnicodeStr, srcType.l = #PB_Unicode)
-  Declare.s ToUnicode (*AsciiStr)
+  Declare.s ToUnicode (*AsciiStr, srcType.l = #PB_Ascii)
   Declare.s ASCIIArray_ToString(Array asciiArray.a(1), srcType.l = #PB_Ascii)
   Declare String_ToASCIIArray(srcString.s, Array DstAsciiArray.a(1), DstType.l = #PB_Unicode)
   
@@ -43,11 +43,12 @@ Module TextEncoding
   ;<comment>
   ;  <summary>convert unicode / UTF8 String to AScii string, using PB String data type</summary>
   ;  <param><b>*AsciiStr</b>: pointer to a string returned by 'ToAscii()', or any ASCII string memory buffer</param>
+  ;  <param><i>Optional </i><b>srcType</b>: Format of the source String </param>
   ;  <return>returns a Unicode string</return>
   ;  <example>Text.s = TextEncoding::ToUnicode(*asciiStr)</example>
   ;</comment>
-  Procedure.s ToUnicode (*AsciiStr)
-    ProcedureReturn PeekS(*AsciiStr, #PB_Default, #PB_Ascii)
+  Procedure.s ToUnicode (*AsciiStr, srcType.l = #PB_Ascii)
+    ProcedureReturn PeekS(*AsciiStr, #PB_Default, srcType)
   EndProcedure
   
   ;<comment>

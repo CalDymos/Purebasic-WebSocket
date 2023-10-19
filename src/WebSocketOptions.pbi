@@ -43,7 +43,7 @@ DeclareModule WebSocketOptions ;
   
   Structure sWebSocketOptions 
     *vTable     ; Pointer to the function table. Always in first place
-    objMutex.i  ; Is needed if the created object is used by different threads
+    Mutex.i  ; Is needed if the created object is used by different threads
     
     ; Daten
     List Headers.Net::sRequestHeader()
@@ -131,7 +131,7 @@ Module WebSocketOptions
       With *Object
       \vTable = *vtWebSocketOptions     ; Set pointer to the function table (methods). 
       
-      \objMutex = CreateMutex()  ; create Mutex to protect the data of the object, when used in multiple threads
+      \Mutex = CreateMutex()  ; create Mutex to protect the data of the object, when used in multiple threads
       
       \SendDelay = 80
       \ConnectionTimout = 15000 ; Set Connection Timout to default value 15000
@@ -143,7 +143,7 @@ Module WebSocketOptions
   
   Procedure Dispose(*This.sWebSocketOptions)
     If *This
-      FreeMutex(*This\objMutex) ; Release Mutex
+      FreeMutex(*This\Mutex) ; Release Mutex
       FreeStructure(*This); Release Memory
     EndIf
   EndProcedure
